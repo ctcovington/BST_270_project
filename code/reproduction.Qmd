@@ -1,0 +1,313 @@
+---
+title: "BST 270: Individual Project"
+author: "Christian Covington"
+format: html
+code-fold: true
+highlight-style: gruvbox
+---
+
+## Choice of project and realizing non-reproducibility
+
+My goal was to reproduce several tables/figures from FiveThirtyEight's [2022 World Cup Predictions](https://projects.fivethirtyeight.com/2022-world-cup-predictions/). In particular, I planned to reproduce the team-level forecasts which are accessed via the `Standings` button, and a few of the match-level forecasts accessed via the `Matches` button. 
+
+However, I found out halfway through the project that the match-level forecasts are not actually reproducible (I'll explain this more later), so I ended up creating a new figure which gives some of the same information but which is possible to create given the information to which I have access.
+
+## Package/Data Loading
+
+We begin by loading necessary packages, which we handle by using [pacman](https://cran.r-project.org/web/packages/pacman/index.html). 
+
+```{r, message = FALSE}
+# load relevant packages 
+if (!require('pacman')) {
+    install.packages('pacman')
+} 
+pacman::p_load('data.table', 'ggplot2', 'RCurl', 'tidyverse', 'knitr', 'kableExtra', 'ggsci')
+```
+
+Next, we load two data sets that we will need to reproduce the figures from the article; one containing match data and one containing forecast data. Both data sets can be found on the [FiveThirtyEight Github page](https://github.com/fivethirtyeight/data/tree/master/world-cup-2022).
+
+> NOTE: We download both data sets directly from online in the code block below if they have not yet been downloaded.
+If they have already been downloaded, we instead load them from the local data directory.
+
+```{r}
+# set working directory (location of repository)
+setwd('/Users/christiancovington/courses/winter_23/BST_270/BST_270_project')
+
+# load data 
+if (file.exists('./data/matches.csv')) {
+    matches <- fread('./data/matches.csv')
+} else {
+    matches <- fread( getURL('https://projects.fivethirtyeight.com/soccer-api/international/2022/wc_matches.csv') )
+    fwrite(matches, './data/matches.csv')
+}
+
+if (file.exists('./data/forecasts.csv')) {
+    forecasts <- fread('./data/forecasts.csv')
+} else {
+    forecasts <- fread( getURL('https://projects.fivethirtyeight.com/soccer-api/international/2022/wc_forecasts.csv') )
+    fwrite(forecasts, './data/forecasts.csv')
+}
+
+```
+
+## Reproduction: Team-level Forecast Table
+
+My first goal is to reproduce the team-level forecasts.
+FiveThirtyEight produced forecasts at eight different times before and during the tournament, which can be cycled through using the dropdown menu at the bottom of the page listed above. There's a lot of structural redundancy here (basically, only the numbers in the table change from one time to another), so I will reproduce the table from the first time period, referred to on the webpage as "before tournament".  
+
+### Identify relevant data
+
+First, I'll subset to observations which correspond to the "before tournament" period. As far as I can tell, there is no documentation on how to do this (or documentation on the data more generally) from FiveThirtyEight, but it's obvious enough that the elegantly named `ï»¿forecast_timestamp` variable corresponds to the time periods in question.
+
+```{r}
+# count and print unique values of forecast timestamp 
+n_unique_timestamps <- nrow(unique(forecasts[, 'ï»¿forecast_timestamp']))
+print(glue::glue('number of unique forecast timestamp values = {n_unique_timestamps}'))
+print(unique(forecasts[, 'ï»¿forecast_timestamp']))
+```
+
+Having identified the timestamp variable, we can now subset our data only to forecasts from the "before tournament" timestamp.
+
+```{r}
+# subset to "before tournament" forecasts
+bt_forecasts <- forecasts[get('ï»¿forecast_timestamp') == '2022-11-16 16:00:55 UTC']
+```
+
+### Identify relevant variables 
+
+We now identify the relevant variables for the table. Again, there is no documentation for how the variables in the data map to entries in the table but it is (mostly) obvious from the variable names. The only columns in the original table whose corresponding variable names are not necessarily obvious are the `OFF.` and `DEF.`,which correspond to variables `global_o` and `global_d`, and `CHANCE OF FINISHING GROUP STAGE IN <k>TH PLACE`, which corresponds to the `group_<k>` variable.
+
+```{r}
+# identify relevant columns and create data for table
+relevant_cols <- c('team', 'group', 'spi', 'global_o', 'global_d',
+              'group_1', 'group_2', 'make_round_of_16', 'make_quarters',
+              'make_semis', 'make_final', 'win_league')
+
+table1_data <- bt_forecasts[, ..relevant_cols]
+colnames(table1_data) <- c('Team', 'Group', 'SPI', 'OFF.', 'DEF.', '1ST PLACE', '2ND PLACE',
+                           'MAKE ROUND OF 16', 'MAKE QUARTERFINALS', 'MAKE SEMIFINALS',
+                           'MAKE FINAL', 'WIN WORLD CUP')
+```
+
+### Reproduce table
+Now we use the data set we just created to reproduce the FiveThirtyEight table (modulo some minor style differences).
+
+```{r}
+faithful_table1_data <- copy(table1_data)
+
+# reformat columns which are numeric but not presented as percentages 
+nonpercentage_cols <- c('SPI', 'OFF.', 'DEF.')
+for (nonpercentage_col in nonpercentage_cols) {
+    new_col <- round(faithful_table1_data[, get(nonpercentage_col)], 1)
+    faithful_table1_data[, eval(nonpercentage_col) := new_col]
+}
+
+# reformat columns which are ultimately presented as percentages 
+percentage_cols <- c('1ST PLACE', '2ND PLACE', 'MAKE ROUND OF 16',
+                     'MAKE QUARTERFINALS', 'MAKE SEMIFINALS',
+                     'MAKE FINAL', 'WIN WORLD CUP')
+for (percentage_col in percentage_cols) {
+    rounded_percentage <- as.character( round(100*faithful_table1_data[, get(percentage_col)], 0))
+    new_col <- glue::glue('{rounded_percentage}%')
+    faithful_table1_data[, eval(percentage_col) := new_col]
+}
+
+# create more faithful table
+knitr::kable(faithful_table1_data) %>% 
+    kable_styling(font_size = 10) %>% 
+    add_header_above(c(' ' = 2, 
+                     'TEAM RATING' = 3,
+                     'CHANCE OF FINISHING GROUP STAGE IN ...' = 2, 
+                     'KNOCKOUT STAGE CHANCES' = 5)) %>% 
+    column_spec(4, color = "white",
+              background = spec_color(table1_data$`OFF.`, end = 0.7)
+              ) %>% 
+    column_spec(5, color = "white",
+              background = spec_color(table1_data$`DEF.`, end = 0.7)
+              ) %>%
+    column_spec(8, color = "white",
+              background = spec_color(table1_data$`MAKE ROUND OF 16`, end = 0.7)
+              ) %>%
+    column_spec(9, color = "white",
+              background = spec_color(table1_data$`MAKE QUARTERFINALS`, end = 0.7)
+              ) %>%
+    column_spec(10, color = "white",
+              background = spec_color(table1_data$`MAKE SEMIFINALS`, end = 0.7)
+              ) %>%
+    column_spec(11, color = "white",
+              background = spec_color(table1_data$`MAKE FINAL`, end = 0.7)
+              ) %>%
+    column_spec(12, color = "white",
+              background = spec_color(table1_data$`WIN WORLD CUP`, end = 0.7)
+              )
+```
+
+## Reproduction: Match-level Forecast Table
+
+We now move on to the match-level forecasts.
+For each World Cup match, FiveThirtyEight gave real-time forecasts showing each team's chance of winning, losing, or drawing (for group-stage matches in which a draw was possible). These forecasts were updated periodically throughout each match in response to match events, eventually culminating in a forecast matching the true outcome of the match. Because reproducing all 64 forecast plots (one for each match), would be quite onerous, I planned to reproduce just two of the plots; one from the group stage (where draws are possible) and one from the knockout round (where draws are not possible).
+
+### Identifying relevant data 
+
+This is where my reproduction attempt hit an issue. Above, I mentioned that FiveThirtyEight's forecasts updated periodically throughout each match -- thus, their figures reflect real-time changes to their forecast during each match. However, these within-match changes to the forecast are not reflected in the data, as we can see by examining the data corresponding to the first match of the World Cup.
+
+```{r}
+# examine data corresponding to first match
+print( matches[date == '2022-11-20'] )
+```
+
+We see that there are initial probabilities that team 1 wins (`prob1`), team 2 wins (`prob2`), and draw (`probtie`), as well as the eventual score (`score1` and `score2`) from which we can get the end-of-game "forecast" that reflects ground truth. However, there is no information about the changing within-game forecast. So, we cannot reproduce the figures that they provide. 
+
+## Forecast examination
+
+Instead, I'll make a few different figures. First, I was interested to examine FiveThirtyEight's forecasts on a few dimensions. 
+
+Below is a plot giving a rough sense for how well the predictions matched the eventual outcomes of each match. 
+The x-axis is `Team 1 SPI - Team 2 SPI`, where `SPI` is a metric of team quality where teams that are believed to be better have higher `SPI`.
+The y-axis is an "adjusted probability" of Team 1 win, where this probability is given by `Pr(Team 1 win) + 0.5*Pr(Draw)`. 
+I chose to give this adjusted probability in order to make the predictions more consistent between the matches where draws are possible and those where 
+they are not. Finally, the points are colored by the actual result of the match. If FiveThirtyEight's algorithm were highly accurate on this sample, we would see
+the `Win` dots at the top of the plot, `Draw` in the middle, and `Loss` at the bottom.
+
+Note that these data do not actually include information about the final result for some of the knockout matches. This is because the only information included about the outcome of the match is the score for each team. We can uncover this by looking at the data for the final match, which was tied at the end of regulation and extra time and 
+instead went to penalty kicks, where Argentina eventually won. However, there is nothing in the data showing the Argentina won the match. 
+
+```{r}
+# examine world cup final to show lack of outcome information
+print(matches[date == '2022-12-18'])
+```
+
+This lack of ability to reliably get actual match results, without the use of outside knowledge, will affect our results for the rest of the analysis.
+In particular, we know that the result of every knockout stage match which ended regular and extra time in a draw (and thus subsequently was decided by a penalty shootout) 
+will be coded as a `Draw` in our data, even though this is structurally impossible.  
+```{r}
+# create new variables for SPI difference and adjusted probability of Team 1 win
+matches[, SPI_diff := spi1 - spi2]
+matches[, prob1_adj := prob1 + 0.5*probtie]
+matches[, `Team 1 Result` := factor(case_when(score1 > score2 ~ 'Win', 
+                                    score1 == score2 ~ 'Draw',
+                                    score1 < score2 ~ 'Loss'), 
+                                    levels = c('Loss', 'Draw', 'Win'))
+       ]
+
+# find how many matches we know have incomplete "winner" information
+n_incomplete <- nrow( matches[probtie == 0 & `Team 1 Result` == 'Draw'] )
+glue::glue('{n_incomplete} matches have incomplete result data')
+```
+
+We now create our figure of interest.
+
+```{r}
+# plot figure
+ggplot(matches, aes(x = SPI_diff, y = prob1_adj, colour = `Team 1 Result`)) + 
+    geom_point(size = 3) + 
+    theme_bw() + 
+    scale_colour_nejm() + 
+    labs(x = 'Team 1 SPI - Team 2 SPI',
+         y = '(Adjusted) Probability of Team 1 Win')
+```
+
+The x-axis in the figure above is a function of both team's `SPI`, which is 
+ESPN's [Soccer Power Index](https://fivethirtyeight.com/methodology/how-our-club-soccer-predictions-work/); 
+an index originally designed by Nate Silver. The predictions appear to track pretty closely with the difference in team SPI, 
+which makes sense (to me) given that Nate Silver created both `SPI` and FiveThirtyEight. 
+
+Just for fun, I wanted to see how FiveThirtyEight's predictions performed relative to a naive function of `SPI`.
+I converted FiveThirtyEight's probabilistic predictions into a categorical variable by choosing the maximum predicted probability; 
+that is, if the probabilities of `Loss`, `Draw`, and `Win` were, say, `c(0.3, 0.2, 0.5)`, I would say that FiveThirtyEight predicted a win.
+If two of the results are given the same probability, this is always coded as a prediction of `Draw`.  
+
+I then made my own naive prediction function, in which the team with a higher `SPI` is predicted to win with probability 1. 
+If the two teams are tied on `SPI`, I predict `Draw`.
+
+```{r}
+# map 538 forecasts to categorical prediction
+matches[, max_prob := pmax(prob1, prob2, probtie)]
+matches[, `Predicted Team 1 Result` := factor(case_when(prob1 == max_prob ~ 'Win', 
+                                                        prob2 == max_prob ~ 'Loss',
+                                                        probtie == max_prob ~ 'Draw',
+                                                        prob1 == prob2 ~ 'Draw'), 
+                                                        levels = c('Loss', 'Draw', 'Win'))
+       ]
+
+# map SPI to categorical prediction
+matches[, `Naive Predicted Team 1 Result` := factor(case_when(spi1 > spi2 ~ 'Win', 
+                                                              spi1 == spi2 ~ 'Draw',
+                                                              spi1 < spi2 ~ 'Loss'), 
+                                                              levels = c('Loss', 'Draw', 'Win'))
+       ]
+```
+
+We note that, after this categorical remapping, the FiveThirtyEight predictions are identical to those from my naive "model". That is, in these data,
+every single match's most likely outcome (according to the FiveThirtyEight predictions) is that the team with the larger SPI wins. 
+
+```{r}
+# get agreement between 538 and naive predictions
+fivethirtyeight_preds <- matches[, `Predicted Team 1 Result`]
+naive_preds <- matches[, `Naive Predicted Team 1 Result`]
+agreement <- fivethirtyeight_preds == naive_preds
+glue::glue('Predictions agree on {sum(agreement)} of {length(agreement)} matches')
+```
+
+As a final step, I wanted to check the performance of FiveThirtyEight's probabilistic predictions against my naive binary predictions. 
+I set up an $\ell_1$ loss function for each match, where FiveThirtyEight's probabilistic predictions and my binary predictions would be compared 
+against the true outcome of the match.
+
+```{r}
+l1_loss <- function(a,b) {
+    return(sum(abs(a-b)))
+}
+
+# get l1 losses
+n_match <- nrow(matches)
+fivethirtyeight_l1_losses <- rep(0, n_match)
+naive_l1_losses <- rep(0, n_match)
+
+for (i in 1:n_match) {
+    actual_y <- case_when(matches[i, `Team 1 Result`] == 'Loss' ~ c(1,0,0),
+                          matches[i, `Team 1 Result`] == 'Draw' ~ c(0,1,0),
+                          matches[i, `Team 1 Result`] == 'Win' ~ c(0,0,1))
+    fivethirtyeight_predicted_y <- as.numeric(matches[i, c('prob2', 'probtie', 'prob1')])
+    naive_predicted_y <- case_when(matches[i, `Naive Predicted Team 1 Result`] == 'Loss' ~ c(1,0,0),
+                                   matches[i, `Naive Predicted Team 1 Result`] == 'Draw' ~ c(0,1,0),
+                                   matches[i, `Naive Predicted Team 1 Result`] == 'Win' ~ c(0,0,1))
+    fivethirtyeight_l1_losses[i] <- l1_loss(actual_y, fivethirtyeight_predicted_y)
+    naive_l1_losses[i] <- l1_loss(actual_y, naive_predicted_y)
+}
+
+glue::glue('Average l1 loss for FiveThirtyEight: {mean(fivethirtyeight_l1_losses)}\n
+            Average l1 loss for naive model: {mean(naive_l1_losses)}')
+```
+
+Somewhat surprisingly to me, the naive model had lower average $\ell_1$ loss than do FiveThirtyEight's probabilistic predictions.
+Obviously this is a small sample, and this may not hold under other plausible loss functions. Moreover, perhaps these results can be explained by the 5 matches which 
+we know have incorrect result data. We drop these and compute the losses again.
+
+```{r}
+# create data without incorrect results
+incomplete_info_matches <- matches[probtie == 0 & `Team 1 Result` == 'Draw']
+matches_correct <- setdiff(matches, incomplete_info_matches)
+
+# get l1 losses
+n_match <- nrow(matches_correct)
+fivethirtyeight_l1_losses <- rep(0, n_match)
+naive_l1_losses <- rep(0, n_match)
+
+for (i in 1:n_match) {
+    actual_y <- case_when(matches_correct[i, `Team 1 Result`] == 'Loss' ~ c(1,0,0),
+                          matches_correct[i, `Team 1 Result`] == 'Draw' ~ c(0,1,0),
+                          matches_correct[i, `Team 1 Result`] == 'Win' ~ c(0,0,1))
+    fivethirtyeight_predicted_y <- as.numeric(matches_correct[i, c('prob2', 'probtie', 'prob1')])
+    naive_predicted_y <- case_when(matches_correct[i, `Naive Predicted Team 1 Result`] == 'Loss' ~ c(1,0,0),
+                                   matches_correct[i, `Naive Predicted Team 1 Result`] == 'Draw' ~ c(0,1,0),
+                                   matches_correct[i, `Naive Predicted Team 1 Result`] == 'Win' ~ c(0,0,1))
+    fivethirtyeight_l1_losses[i] <- l1_loss(actual_y, fivethirtyeight_predicted_y)
+    naive_l1_losses[i] <- l1_loss(actual_y, naive_predicted_y)
+}
+
+glue::glue('Average l1 loss for FiveThirtyEight: {mean(fivethirtyeight_l1_losses)}\n
+            Average l1 loss for naive model: {mean(naive_l1_losses)}')
+```
+
+We get qualitatively similar results here, in that our naive model still outperforms the probabilistic 
+FiveThirtyEight predictions.
